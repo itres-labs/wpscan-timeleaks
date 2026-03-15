@@ -146,5 +146,39 @@ module WPScan
         }
       end
     end
+
+    class MediaAnomalies < InterestingFinding
+      def initialize(url, opts = {})
+        super
+
+        @anomaly_count = opts[:anomaly_count]
+        @jetpack_context = opts[:jetpack_context] ? true : false
+      end
+
+      def to_s
+        @to_s ||= if jetpack_context
+                    "Jetpack-related media anomalies detected: #{anomaly_count} URLs declared in sitemap but absent from sampled rendered HTML"
+                  else
+                    "Media anomalies detected: #{anomaly_count} URLs declared in sitemap but not observed in sampled public pages"
+                  end
+      end
+
+      def anomaly_count
+        @anomaly_count || interesting_entries.size
+      end
+
+      def jetpack_context
+        @jetpack_context
+      end
+
+      def references
+        @references ||= {
+          url: [
+            'https://github.com/wpscanteam/wpscan/issues/1956',
+            'https://jetpack.com/support/sitemaps/'
+          ]
+        }
+      end
+    end
   end
 end

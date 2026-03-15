@@ -1,0 +1,202 @@
+# frozen_string_literal: true
+
+module WPScan
+  module Finders
+    module InterestingFindings
+      # Sitemap-based media anomaly finder
+      class MediaAnomalies < CMSScanner::Finders::Finder
+        MAX_EXTRA_REQUESTS = 80
+        MAX_SITEMAP_URLS = 500
+        MAX_SAMPLED_PAGES = 50
+        MAX_VERIFICATIONS = 20
+        MAX_EXAMPLES = 10
+        MAX_SITEMAP_DOCS = 10
+
+        MEDIA_LIKE_EXT = /\.(?:jpe?g|png|gif|webp|svg|bmp|ico|tiff?|avif|mp4|mov|webm|mp3|wav|ogg|pdf)\z/i
+
+        # @return [InterestingFinding, nil]
+        def aggressive(_opts = {})
+          reset_counters
+
+          sitemap_urls, page_urls, vendors = collect_sitemap_urls
+
+          return if sitemap_urls.empty? || page_urls.empty?
+
+          observed_media = sampled_rendered_media(page_urls)
+          anomalies = sitemap_urls - observed_media
+
+          verified = verify_media_urls(anomalies)
+
+          return if verified.empty?
+
+          jetpack_context = vendors.include?(:jetpack)
+
+          Model::MediaAnomalies.new(
+            target.url,
+            confidence: jetpack_context ? 80 : 65,
+            found_by: DIRECT_ACCESS,
+            interesting_entries: verified.take(MAX_EXAMPLES),
+            anomaly_count: verified.size,
+            jetpack_context: jetpack_context
+          )
+        end
+
+        private
+
+        def reset_counters
+          @request_count = 0
+          @sitemap_doc_count = 0
+        end
+
+        # @return [Array<Array<String>, Array<String>, Array<Symbol>>]
+        def collect_sitemap_urls
+          discovery = Sitemap::Discovery.new(target)
+          parser = Sitemap::Parser.new
+          classifier = Sitemap::VendorClassifier.new
+
+          sitemap_media = []
+          public_pages = []
+          vendors = []
+          queue = discovery.candidates.dup
+          seen = {}
+
+          until queue.empty? || @sitemap_doc_count >= MAX_SITEMAP_DOCS || request_budget_reached?
+            sitemap_url = queue.shift
+            next if seen[sitemap_url]
+
+            seen[sitemap_url] = true
+
+            response = budget_get(sitemap_url)
+            next unless response && response.code == 200
+
+            xml = parser.parse(response.body, source_url: response.effective_url)
+            next unless xml
+
+            @sitemap_doc_count += 1
+            vendors << classifier.classify(url: response.effective_url, xml_body: response.body)
+
+            case parser.root_type(xml)
+            when :sitemapindex
+              queue.concat(sitemap_children(xml))
+            when :urlset
+              urls = sitemap_loc_urls(xml)
+
+              sitemap_media.concat(urls.select { |url| media_url?(url) })
+              public_pages.concat(urls.reject { |url| media_url?(url) })
+            end
+
+            break if sitemap_media.size >= MAX_SITEMAP_URLS
+          end
+
+          [sitemap_media.uniq.take(MAX_SITEMAP_URLS), public_pages.uniq.take(MAX_SAMPLED_PAGES), vendors.uniq]
+        end
+
+        def sampled_rendered_media(page_urls)
+          observed = []
+
+          page_urls.each do |page_url|
+            break if request_budget_reached?
+
+            response = budget_get(page_url)
+            next unless response && response.code == 200
+            next unless html_response?(response)
+
+            observed.concat(media_urls_from_html(response.body.to_s, base_url: response.effective_url))
+          end
+
+          observed.uniq
+        end
+
+        def verify_media_urls(urls)
+          verified = []
+
+          urls.take(MAX_VERIFICATIONS).each do |url|
+            break if request_budget_reached?
+
+            res = budget_get(url)
+            next unless res && res.code == 200
+            next if html_response?(res)
+
+            verified << url
+          end
+
+          verified.uniq
+        end
+
+        def media_urls_from_html(html, base_url:)
+          doc = Nokogiri::HTML(html)
+          urls = []
+
+          urls.concat(attribute_urls(doc, 'img', %w[src data-src data-lazy-src data-original-src]))
+          urls.concat(attribute_urls(doc, 'img', %w[srcset data-srcset], srcset: true))
+          urls.concat(attribute_urls(doc, 'source', %w[srcset data-srcset], srcset: true))
+          urls.concat(attribute_urls(doc, 'a', ['href']))
+
+          urls.filter_map { |url| normalize_url(url, base_url: base_url) }
+              .select { |url| media_url?(url) }
+              .uniq
+        end
+
+        def attribute_urls(doc, selector, attributes, srcset: false)
+          urls = []
+
+          doc.css(selector).each do |node|
+            attributes.each do |attribute|
+              value = node[attribute].to_s.strip
+              next if value.empty?
+
+              if srcset
+                urls.concat(value.split(',').map { |entry| entry.strip.split(/\s+/, 2).first })
+              else
+                urls << value
+              end
+            end
+          end
+
+          urls
+        end
+
+        def normalize_url(url, base_url:)
+          return if url.start_with?('#', 'data:', 'javascript:')
+
+          Addressable::URI.parse(base_url).join(url).to_s
+        rescue Addressable::URI::InvalidURIError
+          nil
+        end
+
+        def sitemap_children(xml)
+          xml.xpath('//*[local-name()="sitemap"]/*[local-name()="loc"]').map(&:text).map(&:strip)
+        end
+
+        def sitemap_loc_urls(xml)
+          xml.xpath('//*[local-name()="url"]/*[local-name()="loc"]').map(&:text).map(&:strip)
+        end
+
+        def media_url?(url)
+          normalized = url.to_s.downcase.split('?').first
+
+          normalized.include?('/wp-content/uploads/') || normalized.match?(MEDIA_LIKE_EXT)
+        end
+
+        def html_response?(response)
+          content_type = response.headers['Content-Type'].to_s
+
+          return true if content_type.match?(%r{\Atext/html\b}i)
+
+          response.body.to_s.lstrip.match?(%r{\A<(?:!doctype\s+html|html)\b}i)
+        end
+
+        def request_budget_reached?
+          @request_count >= MAX_EXTRA_REQUESTS
+        end
+
+        def budget_get(url)
+          return if request_budget_reached?
+
+          @request_count += 1
+          Browser.get(url)
+        end
+      end
+    end
+  end
+end
