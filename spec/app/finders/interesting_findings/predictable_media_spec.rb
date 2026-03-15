@@ -64,6 +64,64 @@ describe WPScan::Finders::InterestingFindings::PredictableMedia do
       end
     end
 
+
+    context 'when media anomalies seed context is available' do
+      before do
+        allow(WPScan::ParsedCli).to receive(:predictable_media).and_return(true)
+        allow(target).to receive(:content_dir).and_return('wp-content')
+
+        target.instance_variable_set(
+          :@predictable_media_seed_context,
+          {
+            suspicious_urls: ['http://ex.lo/wp-content/uploads/2025/02/image-26.png'],
+            discovered_urls: ['http://ex.lo/wp-content/uploads/2025/02/image-26.png']
+          }
+        )
+
+        stub_request(:get, %r{http://ex\.lo/wp-content/uploads/this-should-not-exist-.*\.jpg})
+          .to_return(status: 404, body: '<html>404 page</html>', headers: { 'Content-Type' => 'text/html' })
+      end
+
+      it 'reuses discovered suspicious URLs as seeds before passive seeds' do
+        expect(finder).to receive(:candidates_for_seed).with('http://ex.lo/wp-content/uploads/2025/02/image-26.png')
+                                                   .ordered.and_return([])
+        expect(finder).to receive(:candidates_for_seed).with('http://ex.lo/wp-content/uploads/2025/02/photo-0099-draft.jpg')
+                                                   .ordered.and_return([])
+
+        finder.aggressive
+      end
+
+      it 'finds numeric neighbors from a discovered sitemap media URL' do
+        allow(finder).to receive(:passive_media_seeds).and_return([])
+        stub_request(:get, 'http://ex.lo/wp-content/uploads/2025/02/image-25.png')
+          .to_return(status: 404, body: '')
+        stub_request(:get, 'http://ex.lo/wp-content/uploads/2025/02/image-27.png')
+          .to_return(status: 200, body: 'x' * 64, headers: { 'Content-Type' => 'image/png' })
+        stub_request(:get, 'http://ex.lo/wp-content/uploads/2025/02/image-28.png')
+          .to_return(status: 404, body: '')
+        stub_request(:get, 'http://ex.lo/wp-content/uploads/2025/02/image-24.png')
+          .to_return(status: 404, body: '')
+
+        finding = finder.aggressive
+
+        expect(finding).not_to be_nil
+        expect(finding.interesting_entries).to eq(['http://ex.lo/wp-content/uploads/2025/02/image-27.png'])
+      end
+
+      it 'reports nothing when discovered candidates resolve to baseline-like HTML' do
+        allow(finder).to receive(:passive_media_seeds).and_return([])
+        stub_request(:get, 'http://ex.lo/wp-content/uploads/2025/02/image-25.png')
+          .to_return(status: 200, body: '<html>404 page</html>', headers: { 'Content-Type' => 'text/html' })
+        stub_request(:get, 'http://ex.lo/wp-content/uploads/2025/02/image-27.png')
+          .to_return(status: 200, body: '<html>404 page</html>', headers: { 'Content-Type' => 'text/html' })
+        stub_request(:get, 'http://ex.lo/wp-content/uploads/2025/02/image-28.png')
+          .to_return(status: 200, body: '<html>404 page</html>', headers: { 'Content-Type' => 'text/html' })
+        stub_request(:get, 'http://ex.lo/wp-content/uploads/2025/02/image-24.png')
+          .to_return(status: 200, body: '<html>404 page</html>', headers: { 'Content-Type' => 'text/html' })
+
+        expect(finder.aggressive).to be_nil
+      end
+    end
     context 'when baseline is 200-for-404 HTML' do
       before do
         allow(WPScan::ParsedCli).to receive(:predictable_media).and_return(true)

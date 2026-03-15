@@ -30,6 +30,8 @@ module WPScan
             observed_media_by_page: observed_media_by_page
           )
 
+          cache_predictable_media_seeds(anomalies, observed_media, sitemap_urls)
+
           verified = verify_media_urls(anomalies)
 
           return if verified.empty?
@@ -160,6 +162,16 @@ module WPScan
           end
 
           verified.uniq
+        end
+
+        def cache_predictable_media_seeds(anomalies, observed_media, sitemap_urls)
+          target.instance_variable_set(
+            :@predictable_media_seed_context,
+            {
+              suspicious_urls: anomalies.uniq,
+              discovered_urls: (observed_media + sitemap_urls).uniq
+            }
+          )
         end
 
         def media_urls_from_html(html, base_url:)
