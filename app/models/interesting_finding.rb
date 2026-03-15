@@ -147,6 +147,31 @@ module WPScan
       end
     end
 
+
+    class PredictableMedia < InterestingFinding
+      def initialize(url, opts = {})
+        super
+
+        @predicted_count = opts[:predicted_count]
+      end
+
+      def to_s
+        @to_s ||= "Predictable media candidates detected: #{predicted_count} URLs inferred via aggressive filename prediction from passively observed media URLs (potential exposure, not confirmed publication intent)"
+      end
+
+      def predicted_count
+        @predicted_count || interesting_entries.size
+      end
+
+      def references
+        @references ||= {
+          url: [
+            'https://github.com/wpscanteam/wpscan/issues/1956'
+          ]
+        }
+      end
+    end
+
     class MediaAnomalies < InterestingFinding
       def initialize(url, opts = {})
         super
