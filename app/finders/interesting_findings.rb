@@ -15,6 +15,7 @@ require_relative 'interesting_findings/duplicator_installer_log'
 require_relative 'interesting_findings/upload_directory_listing'
 require_relative 'interesting_findings/emergency_pwd_reset_script'
 require_relative 'interesting_findings/media_anomalies'
+require_relative 'interesting_findings/predictable_media'
 
 module WPScan
   module Finders
@@ -29,7 +30,7 @@ module WPScan
             Readme DebugLog FullPathDisclosure BackupDB DuplicatorInstallerLog
             Multisite MuPlugins Registration UploadDirectoryListing TmmDbMigrate
             UploadSQLDump EmergencyPwdResetScript WPCron PHPDisabled
-            MediaAnomalies
+            MediaAnomalies PredictableMedia
           ].each do |f|
             finders << InterestingFindings.const_get(f).new(target)
           end

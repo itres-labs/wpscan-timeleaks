@@ -10,7 +10,7 @@ describe WPScan::Finders::InterestingFindings::Base do
       %w[
         Readme DebugLog FullPathDisclosure
         Multisite MuPlugins Registration UploadDirectoryListing TmmDbMigrate
-        UploadSQLDump PHPDisabled
+        UploadSQLDump PHPDisabled PredictableMedia
       ]
     end
 
