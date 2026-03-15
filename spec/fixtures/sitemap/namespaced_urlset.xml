@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sm:urlset xmlns:sm="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sm:url>
+    <sm:loc>https://example.com/media/image-1.jpg</sm:loc>
+  </sm:url>
+</sm:urlset>
