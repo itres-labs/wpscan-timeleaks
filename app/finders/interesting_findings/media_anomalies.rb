@@ -18,12 +18,17 @@ module WPScan
         def aggressive(_opts = {})
           reset_counters
 
-          sitemap_urls, page_urls, vendors = collect_sitemap_urls
+          sitemap_urls, page_urls, vendors, declared_media_by_page = collect_sitemap_urls
 
           return if sitemap_urls.empty? || page_urls.empty?
 
-          observed_media = sampled_rendered_media(page_urls)
-          anomalies = sitemap_urls - observed_media
+          observed_media, observed_media_by_page = sampled_rendered_media(page_urls)
+          anomalies = anomaly_candidates(
+            sitemap_urls: sitemap_urls,
+            observed_media: observed_media,
+            declared_media_by_page: declared_media_by_page,
+            observed_media_by_page: observed_media_by_page
+          )
 
           verified = verify_media_urls(anomalies)
 
@@ -48,7 +53,7 @@ module WPScan
           @sitemap_doc_count = 0
         end
 
-        # @return [Array<Array<String>, Array<String>, Array<Symbol>>]
+        # @return [Array<Array<String>, Array<String>, Array<Symbol>, Hash{String => Array<String>}>]
         def collect_sitemap_urls
           discovery = Sitemap::Discovery.new(target)
           parser = Sitemap::Parser.new
@@ -57,6 +62,7 @@ module WPScan
           sitemap_media = []
           public_pages = []
           vendors = []
+          declared_media_by_page = Hash.new { |hash, key| hash[key] = [] }
           queue = discovery.candidates.dup
           seen = {}
 
@@ -79,20 +85,39 @@ module WPScan
             when :sitemapindex
               queue.concat(sitemap_children(xml))
             when :urlset
-              urls = sitemap_loc_urls(xml)
+              sitemap_urls(xml).each do |entry|
+                url = entry[:loc]
+                image_urls = entry[:image_locs].select { |image_url| media_url?(image_url) }
 
-              sitemap_media.concat(urls.select { |url| media_url?(url) })
-              public_pages.concat(urls.reject { |url| media_url?(url) })
+                if image_urls.any?
+                  sitemap_media.concat(image_urls)
+
+                  next unless url && !media_url?(url)
+
+                  public_pages << url
+                  declared_media_by_page[url].concat(image_urls)
+                elsif media_url?(url)
+                  sitemap_media << url
+                else
+                  public_pages << url
+                end
+              end
             end
 
             break if sitemap_media.size >= MAX_SITEMAP_URLS
           end
 
-          [sitemap_media.uniq.take(MAX_SITEMAP_URLS), public_pages.uniq.take(MAX_SAMPLED_PAGES), vendors.uniq]
+          [
+            sitemap_media.uniq.take(MAX_SITEMAP_URLS),
+            public_pages.uniq.take(MAX_SAMPLED_PAGES),
+            vendors.uniq,
+            declared_media_by_page.transform_values { |urls| urls.uniq }
+          ]
         end
 
         def sampled_rendered_media(page_urls)
           observed = []
+          by_page = Hash.new { |hash, key| hash[key] = [] }
 
           page_urls.each do |page_url|
             break if request_budget_reached?
@@ -101,10 +126,24 @@ module WPScan
             next unless response && response.code == 200
             next unless html_response?(response)
 
-            observed.concat(media_urls_from_html(response.body.to_s, base_url: response.effective_url))
+            media = media_urls_from_html(response.body.to_s, base_url: response.effective_url)
+
+            observed.concat(media)
+            by_page[response.effective_url] = media
           end
 
-          observed.uniq
+          [observed.uniq, by_page.transform_values(&:uniq)]
+        end
+
+        def anomaly_candidates(sitemap_urls:, observed_media:, declared_media_by_page:, observed_media_by_page:)
+          mapped_urls = declared_media_by_page.values.flatten.uniq
+          mapped_anomalies = declared_media_by_page.flat_map do |page_url, declared_urls|
+            declared_urls - observed_media_by_page.fetch(page_url, [])
+          end
+
+          unmapped_anomalies = (sitemap_urls - mapped_urls) - observed_media
+
+          (mapped_anomalies + unmapped_anomalies).uniq
         end
 
         def verify_media_urls(urls)
@@ -168,8 +207,15 @@ module WPScan
           xml.xpath('//*[local-name()="sitemap"]/*[local-name()="loc"]').map(&:text).map(&:strip)
         end
 
-        def sitemap_loc_urls(xml)
-          xml.xpath('//*[local-name()="url"]/*[local-name()="loc"]').map(&:text).map(&:strip)
+        def sitemap_urls(xml)
+          xml.xpath('//*[local-name()="url"]').filter_map do |url_node|
+            loc = url_node.at_xpath('./*[local-name()="loc"]')&.text&.strip
+            next if loc.nil? || loc.empty?
+
+            image_locs = url_node.xpath('.//*[local-name()="image"]/*[local-name()="loc"]').map(&:text).map(&:strip)
+
+            { loc: loc, image_locs: image_locs }
+          end
         end
 
         def media_url?(url)

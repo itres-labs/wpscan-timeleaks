@@ -119,6 +119,101 @@ describe WPScan::Finders::InterestingFindings::MediaAnomalies do
       end
     end
 
+    context 'when jetpack image sitemap entries declare media via nested image:loc' do
+      before do
+        stub_request(:get, target.url('wp-sitemap.xml')).to_return(body: <<~XML)
+          <?xml version="1.0" encoding="UTF-8"?>
+          <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <sitemap><loc>http://ex.lo/image-sitemap.xml</loc></sitemap>
+            <sitemap><loc>http://ex.lo/post-sitemap.xml</loc></sitemap>
+          </sitemapindex>
+        XML
+
+        stub_request(:get, 'http://ex.lo/image-sitemap.xml').to_return(body: <<~XML)
+          <?xml version="1.0" encoding="UTF-8"?>
+          <urlset
+            xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+            xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+            xmlns:jp="https://jetpack.com/">
+            <url>
+              <loc>http://ex.lo/post-1/</loc>
+              <image:image>
+                <image:loc>http://ex.lo/wp-content/uploads/2024/10/present.jpg</image:loc>
+              </image:image>
+              <image:image>
+                <image:loc>http://ex.lo/wp-content/uploads/2024/10/orphan.jpg</image:loc>
+              </image:image>
+            </url>
+          </urlset>
+        XML
+      end
+
+      it 'detects anomalies from nested image:loc declarations' do
+        found = finder.aggressive
+
+        expect(found.confidence).to eq(80)
+        expect(found.interesting_entries).to eq(['http://ex.lo/wp-content/uploads/2024/10/orphan.jpg'])
+      end
+    end
+
+    context 'when image sitemap links a parent post and media on labs.itresit.es style data' do
+      let(:url) { 'https://labs.itresit.es/' }
+
+      before do
+        stub_request(:get, target.url('robots.txt')).to_return(body: "Sitemap: #{target.url('wp-sitemap.xml')}\n")
+        stub_request(:get, %r{https://labs\.itresit\.es/(?:sitemap_index|sitemap|news-sitemap)\.xml(?:\.gz)?}).to_return(status: 404, body: '')
+        stub_request(:get, %r{https://labs\.itresit\.es/wp-sitemap\.xml\.gz}).to_return(status: 404, body: '')
+
+        stub_request(:get, target.url('wp-sitemap.xml')).to_return(body: <<~XML)
+          <?xml version="1.0" encoding="UTF-8"?>
+          <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <sitemap><loc>https://labs.itresit.es/wp-sitemap-posts-post-1.xml</loc></sitemap>
+            <sitemap><loc>https://labs.itresit.es/wp-sitemap-posts-post-1-image-sitemap.xml</loc></sitemap>
+          </sitemapindex>
+        XML
+
+        stub_request(:get, 'https://labs.itresit.es/wp-sitemap-posts-post-1.xml').to_return(body: <<~XML)
+          <?xml version="1.0" encoding="UTF-8"?>
+          <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url><loc>https://labs.itresit.es/2025/02/17/sample-post/</loc></url>
+          </urlset>
+        XML
+
+        stub_request(:get, 'https://labs.itresit.es/wp-sitemap-posts-post-1-image-sitemap.xml').to_return(body: <<~XML)
+          <?xml version="1.0" encoding="UTF-8"?>
+          <urlset
+            xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+            xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+            xmlns:jetpack="https://jetpack.com/">
+            <url>
+              <loc>https://labs.itresit.es/2025/02/17/sample-post/</loc>
+              <image:image>
+                <image:loc>https://labs.itresit.es/wp-content/uploads/2025/02/sanitized.jpg</image:loc>
+              </image:image>
+              <image:image>
+                <image:loc>https://labs.itresit.es/wp-content/uploads/2025/02/original-redacted.jpg</image:loc>
+              </image:image>
+            </url>
+          </urlset>
+        XML
+
+        stub_request(:get, 'https://labs.itresit.es/2025/02/17/sample-post/').to_return(
+          body: '<html><body><img src="/wp-content/uploads/2025/02/sanitized.jpg"></body></html>',
+          headers: { 'Content-Type' => 'text/html' }
+        )
+        stub_request(:get, 'https://labs.itresit.es/wp-content/uploads/2025/02/original-redacted.jpg').to_return(
+          body: 'binary', headers: { 'Content-Type' => 'image/jpeg' }
+        )
+      end
+
+      it 'reports nested image sitemap media not observed in sampled rendered HTML' do
+        found = finder.aggressive
+
+        expect(found).not_to be_nil
+        expect(found.interesting_entries).to eq(['https://labs.itresit.es/wp-content/uploads/2025/02/original-redacted.jpg'])
+      end
+    end
+
     it 'keeps interesting entries output bounded to 10 examples' do
       many_media = (1..15).map do |index|
         "<url><loc>http://ex.lo/wp-content/uploads/2024/10/orphan-#{index}.jpg</loc></url>"
