@@ -93,6 +93,20 @@ describe WPScan::Finders::InterestingFindings::MediaAnomalies do
       end
     end
 
+    context 'when anomalies are computed' do
+      it 'stores predictable media seed context on target for PR3 reuse' do
+        finder.aggressive
+
+        context = target.instance_variable_get(:@predictable_media_seed_context)
+
+        expect(context[:suspicious_urls]).to eq(['http://ex.lo/wp-content/uploads/2024/10/orphan.jpg'])
+        expect(context[:discovered_urls]).to include(
+          'http://ex.lo/wp-content/uploads/2024/10/present.jpg',
+          'http://ex.lo/wp-content/uploads/2024/10/orphan.jpg'
+        )
+      end
+    end
+
     context 'when a jetpack sitemap discrepancy is detected' do
       before do
         stub_request(:get, target.url('wp-sitemap.xml')).to_return(body: <<~XML)

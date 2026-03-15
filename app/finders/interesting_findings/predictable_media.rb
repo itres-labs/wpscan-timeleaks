@@ -65,11 +65,21 @@ module WPScan
         end
 
         def observed_media_seeds
+          context = target.instance_variable_get(:@predictable_media_seed_context) || {}
+
+          suspicious = Array(context[:suspicious_urls]).select { |url| media_url?(url) }
+          discovered = Array(context[:discovered_urls]).select { |url| media_url?(url) }
+          passive = passive_media_seeds
+
+          (suspicious + discovered + passive).uniq.take(MAX_SEEDS)
+        end
+
+        def passive_media_seeds
           [target.homepage_res, target.error_404_res].compact.flat_map do |res|
             next [] unless html_response?(res)
 
             media_urls_from_html(res.body.to_s, base_url: res.effective_url)
-          end.uniq.take(MAX_SEEDS)
+          end
         end
 
         def media_urls_from_html(html, base_url:)
