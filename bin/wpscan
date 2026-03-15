@@ -8,6 +8,7 @@ WPScan::Scan.new do |s|
     WPScan::Controller::VulnApi.new <<
     WPScan::Controller::CustomDirectories.new <<
     WPScan::Controller::InterestingFindings.new <<
+    WPScan::Controller::PredictableMedia.new <<
     WPScan::Controller::WpVersion.new <<
     WPScan::Controller::MainTheme.new <<
     WPScan::Controller::Enumeration.new <<

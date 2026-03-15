@@ -8,8 +8,7 @@ module WPScan
         [
           OptBoolean.new(
             ['--predictable-media',
-             'Enable aggressive predictive media checks based on passively observed media URLs (experimental, low-noise).'],
-            advanced: true
+             'Enable aggressive predictive media checks based on passively observed media URLs (experimental, low-noise).']
           )
         ]
       end
