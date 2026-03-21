@@ -121,6 +121,29 @@ describe WPScan::Finders::InterestingFindings::PredictableMedia do
 
         expect(finder.aggressive).to be_nil
       end
+
+      it 'rejects cross-host context seeds before candidate probing' do
+        target.instance_variable_set(
+          :@predictable_media_seed_context,
+          {
+            suspicious_urls: [
+              'http://cdn.third-party.example/wp-content/uploads/2025/02/foreign-26.png',
+              'http://ex.lo/wp-content/uploads/2025/02/image-26.png'
+            ],
+            discovered_urls: [
+              'http://images.other.example/wp-content/uploads/2025/02/foreign-27.png'
+            ]
+          }
+        )
+
+        allow(finder).to receive(:passive_media_seeds).and_return([])
+
+        expect(finder).to receive(:candidates_for_seed).with('http://ex.lo/wp-content/uploads/2025/02/image-26.png')
+                                                   .and_return([])
+        expect(finder).not_to receive(:candidates_for_seed).with(/foreign-\d+\.png/)
+
+        finder.aggressive
+      end
     end
     context 'when baseline is 200-for-404 HTML' do
       before do

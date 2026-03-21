@@ -66,9 +66,10 @@ module WPScan
 
         def observed_media_seeds
           context = target.instance_variable_get(:@predictable_media_seed_context) || {}
+          target_host = target.uri.host
 
-          suspicious = Array(context[:suspicious_urls]).select { |url| media_url?(url) }
-          discovered = Array(context[:discovered_urls]).select { |url| media_url?(url) }
+          suspicious = Array(context[:suspicious_urls]).select { |url| media_url?(url) && same_host?(url, target_host) }
+          discovered = Array(context[:discovered_urls]).select { |url| media_url?(url) && same_host?(url, target_host) }
           passive = passive_media_seeds
 
           (suspicious + discovered + passive).uniq.take(MAX_SEEDS)
@@ -246,6 +247,12 @@ module WPScan
           normalized = url.to_s.downcase.split('?').first
 
           normalized.include?('/wp-content/uploads/') || normalized.match?(MEDIA_LIKE_EXT)
+        end
+
+        def same_host?(url, host)
+          Addressable::URI.parse(url).host == host
+        rescue Addressable::URI::InvalidURIError
+          false
         end
 
         def html_response?(response)
