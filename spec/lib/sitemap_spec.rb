@@ -76,6 +76,13 @@ describe WPScan::Sitemap::Parser do
       expect(parser.root_type(result)).to eq(:urlset)
     end
 
+    it 'accepts plain xml served from a .gz URL when body is not gzipped' do
+      result = parser.parse(File.binread(fixtures.join('urlset.xml')), source_url: 'https://example.com/sitemap.xml.gz')
+
+      expect(result).not_to be_nil
+      expect(parser.root_type(result)).to eq(:urlset)
+    end
+
     it 'rejects HTML masquerading as XML sitemap content' do
       result = parser.parse(File.binread(fixtures.join('html_page.html')), source_url: 'https://example.com/sitemap.xml')
 
@@ -107,5 +114,20 @@ describe WPScan::Sitemap::VendorClassifier do
 
   it 'classifies unknown sitemap vendors' do
     expect(classifier.classify(url: 'https://example.com/custom.xml')).to eq(:unknown)
+  end
+
+  it 'does not classify yoast from unrelated hostname/path words alone' do
+    expect(classifier.classify(url: 'https://yoast-cdn.example.com/path/jetpack-custom.xml')).to eq(:unknown)
+  end
+
+  it 'does not classify jetpack from arbitrary body text' do
+    xml = <<~XML
+      <?xml version="1.0" encoding="UTF-8"?>
+      <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+        <url><loc>https://example.com/notes/mentions-jetpack-word</loc></url>
+      </urlset>
+    XML
+
+    expect(classifier.classify(url: 'https://example.com/sitemap.xml', xml_body: xml)).to eq(:unknown)
   end
 end

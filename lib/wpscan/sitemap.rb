@@ -50,8 +50,8 @@ module WPScan
       # @param [String,nil] source_url
       #
       # @return [Nokogiri::XML::Document,nil]
-      def parse(body, source_url: nil)
-        xml = Nokogiri::XML(parsed_body(body, source_url: source_url)) { |cfg| cfg.strict.nonet }
+      def parse(body, source_url: nil, headers: nil)
+        xml = Nokogiri::XML(parsed_body(body, source_url: source_url, headers: headers)) { |cfg| cfg.strict.nonet }
 
         return unless xml.errors.empty?
         return if xml.root.nil?
@@ -73,22 +73,38 @@ module WPScan
 
       private
 
-      def parsed_body(body, source_url: nil)
-        xml_like = maybe_unzip(body.to_s, source_url: source_url)
+      def parsed_body(body, source_url: nil, headers: nil)
+        xml_like = maybe_unzip(body.to_s, headers: headers)
 
         raise Nokogiri::XML::SyntaxError, 'HTML detected instead of XML' if html_response?(xml_like)
 
         xml_like
       end
 
-      def maybe_unzip(body, source_url: nil)
-        return body unless gzip?(body, source_url: source_url)
+      def maybe_unzip(body, headers: nil)
+        return body unless gzip?(body, headers: headers)
 
         Zlib::GzipReader.new(StringIO.new(body)).read
       end
 
-      def gzip?(body, source_url: nil)
-        body.start_with?("\x1F\x8B".b) || source_url.to_s.end_with?('.gz')
+      def gzip?(body, headers: nil)
+        return true if body.start_with?("\x1F\x8B".b)
+
+        header_gzip?(headers)
+      end
+
+      def header_gzip?(headers)
+        return false unless headers
+
+        content_encoding = header_value(headers, 'Content-Encoding')
+        content_type = header_value(headers, 'Content-Type')
+
+        content_encoding.to_s.downcase.include?('gzip') ||
+          content_type.to_s.downcase.split(';').first == 'application/x-gzip'
+      end
+
+      def header_value(headers, key)
+        headers[key] || headers[key.downcase] || headers[key.upcase]
       end
 
       def html_response?(body)
@@ -103,13 +119,39 @@ module WPScan
       #
       # @return [Symbol]
       def classify(url:, xml_body: nil)
-        haystack = [url.to_s.downcase, xml_body.to_s.downcase].join("\n")
+        normalized_path = normalized_path(url)
+        xml_body = xml_body.to_s
 
-        return :yoast if haystack.include?('wordpress-seo') || haystack.include?('yoast')
-        return :jetpack if haystack.include?('jetpack')
-        return :wordpress_core if haystack.include?('/wp-sitemap') || haystack.include?('wp-sitemap.xsl')
+        return :yoast if yoast_signal?(normalized_path, xml_body)
+        return :jetpack if jetpack_signal?(normalized_path, xml_body)
+        return :wordpress_core if wordpress_core_signal?(normalized_path, xml_body)
 
         :unknown
+      end
+
+      private
+
+      def normalized_path(url)
+        Addressable::URI.parse(url.to_s).path.to_s.downcase
+      rescue Addressable::URI::InvalidURIError
+        ''
+      end
+
+      def yoast_signal?(path, body)
+        path.match?(%r{/(?:[^/]+-)?(?:post|page|category|post_tag|author)-sitemap\d*\.xml\z}) ||
+          body.match?(%r{/wp-content/plugins/wordpress-seo/}i) ||
+          body.match?(%r{https?://wordpress\.org/plugins/wordpress-seo/}i) ||
+          body.match?(%r{https?://yoast\.com/}i)
+      end
+
+      def jetpack_signal?(path, body)
+        path.include?('-image-sitemap') ||
+          body.match?(%r{/wp-content/plugins/jetpack/}i) ||
+          body.match?(%r{xmlns:(?:jetpack|jp)\s*=\s*["']https?://jetpack\.com/}i)
+      end
+
+      def wordpress_core_signal?(path, body)
+        path.include?('/wp-sitemap') || body.include?('wp-sitemap.xsl')
       end
     end
   end

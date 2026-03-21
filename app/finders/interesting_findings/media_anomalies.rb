@@ -22,12 +22,13 @@ module WPScan
 
           return if sitemap_urls.empty? || page_urls.empty?
 
-          observed_media, observed_media_by_page = sampled_rendered_media(page_urls)
+          observed_media, observed_media_by_page, sampled_pages = sampled_rendered_media(page_urls)
           anomalies = anomaly_candidates(
             sitemap_urls: sitemap_urls,
             observed_media: observed_media,
             declared_media_by_page: declared_media_by_page,
-            observed_media_by_page: observed_media_by_page
+            observed_media_by_page: observed_media_by_page,
+            sampled_pages: sampled_pages
           )
 
           cache_predictable_media_seeds(anomalies, observed_media, sitemap_urls)
@@ -77,7 +78,7 @@ module WPScan
             response = budget_get(sitemap_url)
             next unless response && response.code == 200
 
-            xml = parser.parse(response.body, source_url: response.effective_url)
+            xml = parser.parse(response.body, source_url: response.effective_url, headers: response.headers)
             next unless xml
 
             @sitemap_doc_count += 1
@@ -119,7 +120,8 @@ module WPScan
 
         def sampled_rendered_media(page_urls)
           observed = []
-          by_page = Hash.new { |hash, key| hash[key] = [] }
+          by_page = {}
+          sampled_pages = []
 
           page_urls.each do |page_url|
             break if request_budget_reached?
@@ -131,21 +133,42 @@ module WPScan
             media = media_urls_from_html(response.body.to_s, base_url: response.effective_url)
 
             observed.concat(media)
-            by_page[response.effective_url] = media
+            by_page[page_url] = media
+            sampled_pages << page_url
+
+            effective_url = response.effective_url.to_s
+            by_page[effective_url] = media if !effective_url.empty? && effective_url != page_url
           end
 
-          [observed.uniq, by_page.transform_values(&:uniq)]
+          [observed.uniq, by_page.transform_values(&:uniq), sampled_pages.uniq]
         end
 
-        def anomaly_candidates(sitemap_urls:, observed_media:, declared_media_by_page:, observed_media_by_page:)
+        def anomaly_candidates(sitemap_urls:, observed_media:, declared_media_by_page:, observed_media_by_page:, sampled_pages:)
+          canonical_observed_media = observed_media.filter_map { |url| canonical_media_identifier(url) }.uniq
+          canonical_sitemap_urls = sitemap_urls.filter_map { |url| canonical_media_identifier(url) }.uniq
+
+          sampled_declared = declared_media_by_page.select { |page_url, _| sampled_pages.include?(page_url) }
           mapped_urls = declared_media_by_page.values.flatten.uniq
-          mapped_anomalies = declared_media_by_page.flat_map do |page_url, declared_urls|
-            declared_urls - observed_media_by_page.fetch(page_url, [])
+          mapped_anomalies = sampled_declared.flat_map do |page_url, declared_urls|
+            observed_for_page = observed_media_by_page.fetch(page_url, [])
+            observed_ids = observed_for_page.filter_map { |url| canonical_media_identifier(url) }.uniq
+
+            declared_urls.reject do |declared_url|
+              canonical = canonical_media_identifier(declared_url)
+              canonical && observed_ids.include?(canonical)
+            end
           end
 
-          unmapped_anomalies = (sitemap_urls - mapped_urls) - observed_media
+          canonical_mapped_urls = mapped_urls.filter_map { |url| canonical_media_identifier(url) }.uniq
+          unmapped_anomalies = sitemap_urls.reject do |url|
+            canonical = canonical_media_identifier(url)
+            canonical && (canonical_mapped_urls.include?(canonical) || canonical_observed_media.include?(canonical))
+          end
 
-          (mapped_anomalies + unmapped_anomalies).uniq
+          (mapped_anomalies + unmapped_anomalies).uniq.select do |url|
+            canonical = canonical_media_identifier(url)
+            canonical && canonical_sitemap_urls.include?(canonical)
+          end
         end
 
         def verify_media_urls(urls)
@@ -157,6 +180,7 @@ module WPScan
             res = budget_get(url)
             next unless res && res.code == 200
             next if html_response?(res)
+            next unless acceptable_media_content_type?(res)
 
             verified << url
           end
@@ -234,6 +258,32 @@ module WPScan
           normalized = url.to_s.downcase.split('?').first
 
           normalized.include?('/wp-content/uploads/') || normalized.match?(MEDIA_LIKE_EXT)
+        end
+
+        def canonical_media_identifier(url)
+          uri = Addressable::URI.parse(url.to_s)
+          path = uri.path.to_s
+          return if path.empty?
+
+          normalized_path = path.downcase.gsub(%r{/+}, '/')
+          upload_index = normalized_path.index('/wp-content/uploads/')
+
+          if upload_index
+            normalized_path[upload_index..]
+          else
+            normalized_path
+          end
+        rescue Addressable::URI::InvalidURIError
+          nil
+        end
+
+        def acceptable_media_content_type?(response)
+          content_type = response.headers['Content-Type'].to_s.downcase.split(';').first
+
+          return false if content_type.empty?
+
+          content_type.start_with?('image/', 'video/', 'audio/') ||
+            %w[application/pdf application/octet-stream].include?(content_type)
         end
 
         def html_response?(response)
