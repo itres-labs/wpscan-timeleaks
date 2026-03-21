@@ -147,8 +147,10 @@ module WPScan
           canonical_observed_media = observed_media.filter_map { |url| canonical_media_identifier(url) }.uniq
           canonical_sitemap_urls = sitemap_urls.filter_map { |url| canonical_media_identifier(url) }.uniq
 
-          sampled_declared = declared_media_by_page.select { |page_url, _| sampled_pages.include?(page_url) }
-          mapped_urls = declared_media_by_page.values.flatten.uniq
+          sampled_declared = declared_media_by_page.select do |page_url, _|
+            sampled_pages.include?(page_url) || observed_media_by_page.key?(page_url)
+          end
+          mapped_urls = sampled_declared.values.flatten.uniq
           mapped_anomalies = sampled_declared.flat_map do |page_url, declared_urls|
             observed_for_page = observed_media_by_page.fetch(page_url, [])
             observed_ids = observed_for_page.filter_map { |url| canonical_media_identifier(url) }.uniq

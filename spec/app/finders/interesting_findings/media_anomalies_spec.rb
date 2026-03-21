@@ -300,6 +300,35 @@ describe WPScan::Finders::InterestingFindings::MediaAnomalies do
       expect(found.interesting_entries).to eq(['http://ex.lo/wp-content/uploads/2024/10/orphan.jpg'])
     end
 
+    it 'keeps mapped diffing when declared page URL matches a sampled effective URL alias' do
+      stub_request(:get, 'http://ex.lo/media-sitemap.xml').to_return(body: <<~XML)
+        <?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+                xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+          <url>
+            <loc>https://ex.lo/post-1</loc>
+            <image:image><image:loc>http://ex.lo/wp-content/uploads/2024/10/present.jpg</image:loc></image:image>
+            <image:image><image:loc>http://ex.lo/wp-content/uploads/2024/10/orphan.jpg</image:loc></image:image>
+          </url>
+        </urlset>
+      XML
+
+      allow(WPScan::Browser).to receive(:get).and_call_original
+      allow(WPScan::Browser).to receive(:get).with('http://ex.lo/post-1/').and_return(
+        Typhoeus::Response.new(
+          code: 200,
+          effective_url: 'https://ex.lo/post-1',
+          body: '<html><body><img src="/wp-content/uploads/2024/10/present.jpg"></body></html>',
+          headers: { 'Content-Type' => 'text/html' }
+        )
+      )
+
+      found = finder.aggressive
+
+      expect(found).not_to be_nil
+      expect(found.interesting_entries).to eq(['http://ex.lo/wp-content/uploads/2024/10/orphan.jpg'])
+    end
+
     it 'does not diff unsampled pages as empty observations' do
       stub_request(:get, 'http://ex.lo/post-sitemap.xml').to_return(body: <<~XML)
         <?xml version="1.0" encoding="UTF-8"?>
