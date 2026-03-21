@@ -363,6 +363,42 @@ describe WPScan::Finders::InterestingFindings::MediaAnomalies do
       expect(finder.aggressive).to be_nil
     end
 
+    it 'keeps unsampled declared media out of anomalies while still reporting direct sitemap media anomalies' do
+      stub_request(:get, 'http://ex.lo/post-sitemap.xml').to_return(body: <<~XML)
+        <?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>http://ex.lo/post-1/</loc></url>
+          <url><loc>http://ex.lo/post-2/</loc></url>
+        </urlset>
+      XML
+
+      stub_request(:get, 'http://ex.lo/media-sitemap.xml').to_return(body: <<~XML)
+        <?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+                xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+          <url><loc>http://ex.lo/wp-content/uploads/2024/10/orphan.jpg</loc></url>
+          <url>
+            <loc>http://ex.lo/post-2/</loc>
+            <image:image><image:loc>http://ex.lo/wp-content/uploads/2024/10/unsampled.jpg</image:loc></image:image>
+          </url>
+        </urlset>
+      XML
+
+      stub_request(:get, 'http://ex.lo/post-1/').to_return(
+        status: 200,
+        body: '<html><body><img src="/wp-content/uploads/2024/10/present.jpg"></body></html>',
+        headers: { 'Content-Type' => 'text/html' }
+      )
+      stub_request(:get, 'http://ex.lo/post-2/').to_return(status: 504, body: '')
+      stub_request(:get, 'http://ex.lo/wp-content/uploads/2024/10/unsampled.jpg')
+        .to_return(body: 'binary', headers: { 'Content-Type' => 'image/jpeg' })
+
+      found = finder.aggressive
+
+      expect(found).not_to be_nil
+      expect(found.interesting_entries).to eq(['http://ex.lo/wp-content/uploads/2024/10/orphan.jpg'])
+    end
+
     it 'enforces the global request budget' do
       huge_post_sitemap = (1..120).map do |index|
         "<url><loc>http://ex.lo/post-#{index}/</loc></url>"
