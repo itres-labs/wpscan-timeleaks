@@ -399,6 +399,42 @@ describe WPScan::Finders::InterestingFindings::MediaAnomalies do
       expect(found.interesting_entries).to eq(['http://ex.lo/wp-content/uploads/2024/10/orphan.jpg'])
     end
 
+    it 'preserves direct sitemap anomalies when unsampled page declarations share the same canonical media URL' do
+      stub_request(:get, 'http://ex.lo/post-sitemap.xml').to_return(body: <<~XML)
+        <?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>http://ex.lo/post-1/</loc></url>
+          <url><loc>http://ex.lo/post-2/</loc></url>
+        </urlset>
+      XML
+
+      stub_request(:get, 'http://ex.lo/media-sitemap.xml').to_return(body: <<~XML)
+        <?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+                xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+          <url><loc>http://ex.lo/wp-content/uploads/2024/10/shared.jpg?ver=2</loc></url>
+          <url>
+            <loc>http://ex.lo/post-2/</loc>
+            <image:image><image:loc>http://ex.lo/wp-content/uploads/2024/10/shared.jpg</image:loc></image:image>
+          </url>
+        </urlset>
+      XML
+
+      stub_request(:get, 'http://ex.lo/post-1/').to_return(
+        status: 200,
+        body: '<html><body><p>hello</p></body></html>',
+        headers: { 'Content-Type' => 'text/html' }
+      )
+      stub_request(:get, 'http://ex.lo/post-2/').to_return(status: 504, body: '')
+      stub_request(:get, 'http://ex.lo/wp-content/uploads/2024/10/shared.jpg?ver=2')
+        .to_return(body: 'binary', headers: { 'Content-Type' => 'image/jpeg' })
+
+      found = finder.aggressive
+
+      expect(found).not_to be_nil
+      expect(found.interesting_entries).to eq(['http://ex.lo/wp-content/uploads/2024/10/shared.jpg?ver=2'])
+    end
+
     it 'enforces the global request budget' do
       huge_post_sitemap = (1..120).map do |index|
         "<url><loc>http://ex.lo/post-#{index}/</loc></url>"

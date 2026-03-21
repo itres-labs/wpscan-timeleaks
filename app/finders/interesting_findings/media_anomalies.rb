@@ -147,17 +147,19 @@ module WPScan
           canonical_observed_media = observed_media.filter_map { |url| canonical_media_identifier(url) }.uniq
           canonical_sitemap_urls = sitemap_urls.filter_map { |url| canonical_media_identifier(url) }.uniq
 
-          canonical_declared_urls = declared_media_by_page.values.flatten.filter_map do |url|
-            canonical_media_identifier(url)
-          end.uniq
-
           sampled_declared = declared_media_by_page.select do |page_url, _|
+            sampled_pages.include?(page_url) || observed_media_by_page.key?(page_url)
+          end
+
+          unsampled_declared = declared_media_by_page.reject do |page_url, _|
             sampled_pages.include?(page_url) || observed_media_by_page.key?(page_url)
           end
 
           canonical_sampled_declared_urls = sampled_declared.values.flatten.filter_map do |url|
             canonical_media_identifier(url)
           end.uniq
+
+          unsampled_declared_urls = unsampled_declared.values.flatten.uniq
 
           mapped_urls = sampled_declared.values.flatten.uniq
           mapped_anomalies = sampled_declared.flat_map do |page_url, declared_urls|
@@ -173,10 +175,11 @@ module WPScan
           canonical_mapped_urls = mapped_urls.filter_map { |url| canonical_media_identifier(url) }.uniq
           unmapped_anomalies = sitemap_urls.reject do |url|
             canonical = canonical_media_identifier(url)
-            unsampled_declared = canonical_declared_urls.include?(canonical) && !canonical_sampled_declared_urls.include?(canonical)
+            unsampled_page_declared = unsampled_declared_urls.include?(url) &&
+                                      !canonical_sampled_declared_urls.include?(canonical)
 
             canonical && (
-              unsampled_declared ||
+              unsampled_page_declared ||
               canonical_mapped_urls.include?(canonical) ||
               canonical_observed_media.include?(canonical)
             )
